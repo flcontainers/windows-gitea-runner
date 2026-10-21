@@ -1,0 +1,4 @@
+.env
+storage/
+oem/config.env
+*.iso

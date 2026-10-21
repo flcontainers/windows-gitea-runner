@@ -1,0 +1,60 @@
+# Windows Server 2025 VM (dockur/windows on KVM) hosting a Gitea Actions runner for MSVC builds.
+services:
+  # Renders the in-VM settings from .env into oem/config.env (copied to C:\OEM at install, then synced via the share).
+  oem-config:
+    image: busybox:1.37.0
+    environment:
+      GITEA_INSTANCE_URL: ${GITEA_INSTANCE_URL:?set GITEA_INSTANCE_URL}
+      GITEA_RUNNER_TOKEN: ${GITEA_RUNNER_TOKEN:-}
+      RUNNER_NAME: ${RUNNER_NAME:-win-runner-01}
+      RUNNER_LABELS: ${RUNNER_LABELS:-windows-latest:host,windows-2025:host}
+      RUNNER_VERSION: ${RUNNER_VERSION:-5}
+      RUNNER_CAPACITY: ${RUNNER_CAPACITY:-1}
+      UPDATE_DAYS: ${UPDATE_DAYS-Sunday}
+      UPDATE_TIME: ${UPDATE_TIME:-03:00}
+      UPDATE_MAX_WAIT_MIN: ${UPDATE_MAX_WAIT_MIN:-240}
+      KMS_HOST: ${KMS_HOST:-}
+      KMS_PORT: ${KMS_PORT:-1688}
+      KMS_EDITION: ${KMS_EDITION:-ServerStandard}
+      KMS_CLIENT_KEY: ${KMS_CLIENT_KEY:-}
+      LOCALE_KEYBOARD: ${LOCALE_KEYBOARD:-}
+      LOCALE_TIMEZONE: ${LOCALE_TIMEZONE:-}
+    volumes:
+      - ./oem:/oem
+    command: ["sh", "-c", "env | grep -E '^(GITEA_|RUNNER_|KMS_|UPDATE_|LOCALE_)' > /oem/config.env"]
+
+  windows:
+    image: dockurr/windows:6.05
+    container_name: windows-gitea-runner
+    depends_on:
+      oem-config:
+        condition: service_completed_successfully
+        # Reboot the VM when the rendered config changes, so configure.ps1 applies it.
+        restart: true
+    environment:
+      VERSION: ${WIN_VERSION:-2025}
+      RAM_SIZE: ${WIN_RAM:-32G}
+      CPU_CORES: ${WIN_CPUS:-12}
+      DISK_SIZE: ${WIN_DISK:-200G}
+      USERNAME: ${WIN_USER:-Docker}
+      PASSWORD: ${WIN_PASSWORD:?set WIN_PASSWORD in .env}
+      # Install-time only (answer file); configure.ps1 applies LOCALE_* to a running VM.
+      KEYBOARD: ${LOCALE_KEYBOARD:-en-US}
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - ${BIND_ADDR:-127.0.0.1}:8006:8006 # web console
+      - ${BIND_ADDR:-127.0.0.1}:3389:3389/tcp
+      - ${BIND_ADDR:-127.0.0.1}:3389:3389/udp
+    volumes:
+      - ./storage:/storage
+      - ./oem:/oem
+      # Same folder as \\host.lan\Data in the VM: configure.ps1 pulls config.env and script fixes from it at each runner start.
+      - ./oem:/shared:ro
+      # Your own volume-licence media instead of the evaluation download (VERSION is then ignored):
+      # - ./windows.iso:/custom.iso:ro
+    restart: unless-stopped
+    stop_grace_period: 2m
